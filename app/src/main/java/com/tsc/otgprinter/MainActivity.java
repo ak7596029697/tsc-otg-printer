@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.pdf.PdfRenderer;
 import android.hardware.usb.UsbConstants;
@@ -150,6 +151,7 @@ public class MainActivity extends Activity {
         }
     }
 
+    // প্রিভিউতেও সঠিক অনুপাতে ঘোরানো ছবি দেখানো
     private void renderPreviewPage(int pageIndex) {
         if (pdfUri == null || totalPdfPages == 0) return;
         try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
@@ -157,20 +159,43 @@ public class MainActivity extends Activity {
                 PdfRenderer renderer = new PdfRenderer(pfd);
                 PdfRenderer.Page page = renderer.openPage(pageIndex);
 
-                Bitmap previewBmp = Bitmap.createBitmap(400, 600, Bitmap.Config.ARGB_8888);
-                Canvas canvas = new Canvas(previewBmp);
-                canvas.drawColor(Color.WHITE);
-                page.render(previewBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                Bitmap renderedBmp = renderPageAutoRotated(page, 400, 600);
                 page.close();
                 renderer.close();
 
-                ivPreview.setImageBitmap(previewBmp);
+                ivPreview.setImageBitmap(renderedBmp);
                 tvPageIndicator.setText("Page " + (pageIndex + 1) + "/" + totalPdfPages);
 
                 btnPrevPage.setEnabled(pageIndex > 0);
                 btnNextPage.setEnabled(pageIndex < totalPdfPages - 1);
             }
         } catch (Exception ignored) {}
+    }
+
+    // পেজ যদি ল্যান্ডস্কেপ (Meesho) হয় তবে অটোমেটিক ৯০ ডিগ্রি ঘুরিয়ে নিখুঁত খাড়া করার মেথড
+    private Bitmap renderPageAutoRotated(PdfRenderer.Page page, int targetW, int targetH) {
+        int pw = page.getWidth();
+        int ph = page.getHeight();
+        boolean isLandscape = pw > ph;
+
+        // ল্যান্ডস্কেপ হলে মাপ উল্টে রেন্ডার করা হবে যাতে বিকৃত না হয়
+        int rw = isLandscape ? targetH : targetW;
+        int rh = isLandscape ? targetW : targetH;
+
+        Bitmap tempBmp = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(tempBmp);
+        canvas.drawColor(Color.WHITE);
+        page.render(tempBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+
+        if (isLandscape) {
+            Matrix matrix = new Matrix();
+            matrix.postRotate(90);
+            Bitmap rotatedBmp = Bitmap.createBitmap(tempBmp, 0, 0, tempBmp.getWidth(), tempBmp.getHeight(), matrix, true);
+            tempBmp.recycle();
+            return rotatedBmp;
+        }
+
+        return tempBmp;
     }
 
     private void checkUsbAndPrint() {
@@ -238,10 +263,9 @@ public class MainActivity extends Activity {
         updateStatus("Starting print engine...");
 
         final boolean is3x5 = spPaperSize.getSelectedItemPosition() == 1;
-        // ৩x৫ পেপারের জন্য মার্জিন ও সাইজ অ্যাডজাস্টমেন্ট
-        final int canvasWidth = is3x5 ? 600 : 800;
-        final int canvasHeight = is3x5 ? 1000 : 1200;
-        final int renderHeight = is3x5 ? 930 : 1200; // নিচে মার্জিন দেওয়ার জন্য রেন্ডার হাইট কমানো হলো
+        final int targetWidth = is3x5 ? 600 : 800;
+        final int targetHeight = is3x5 ? 930 : 1200;
+        final int finalCanvasHeight = is3x5 ? 1000 : 1200;
         final String sizeCmd = is3x5 ? "SIZE 75 mm, 125 mm\n" : "SIZE 100 mm, 150 mm\n";
 
         new Thread(() -> {
@@ -293,25 +317,19 @@ public class MainActivity extends Activity {
                     updateStatus("Sending page " + currPage + " to printer...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    Bitmap fullCanvas = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888);
-                    Canvas canvas = new Canvas(fullCanvas);
-                    canvas.drawColor(Color.WHITE);
-
-                    if (is3x5) {
-                        // মার্জিন রাখার জন্য পেজটিকে উপরে রেন্ডার করে নিচের দিকে পর্যাপ্ত ফাঁকা রাখা হলো
-                        Bitmap tempBmp = Bitmap.createBitmap(canvasWidth, renderHeight, Bitmap.Config.ARGB_8888);
-                        Canvas tempCanvas = new Canvas(tempBmp);
-                        tempCanvas.drawColor(Color.WHITE);
-                        page.render(tempBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                        canvas.drawBitmap(tempBmp, 0, 15, null);
-                        tempBmp.recycle();
-                    } else {
-                        page.render(fullCanvas, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                    }
+                    Bitmap labelBitmap = renderPageAutoRotated(page, targetWidth, targetHeight);
                     page.close();
 
-                    byte[] tsplCommands = buildTsplBitmapCommand(fullCanvas, sizeCmd);
-                    fullCanvas.recycle();
+                    Bitmap printCanvas = Bitmap.createBitmap(targetWidth, finalCanvasHeight, Bitmap.Config.ARGB_8888);
+                    Canvas canvas = new Canvas(printCanvas);
+                    canvas.drawColor(Color.WHITE);
+                    // ৩x৫ পেপারের জন্য উপরে ও নিচে মার্জিন অ্যাডজাস্ট
+                    int topOffset = is3x5 ? 15 : 0;
+                    canvas.drawBitmap(labelBitmap, 0, topOffset, null);
+                    labelBitmap.recycle();
+
+                    byte[] tsplCommands = buildTsplBitmapCommand(printCanvas, sizeCmd);
+                    printCanvas.recycle();
 
                     int offset = 0;
                     int chunkSize = 4096;
