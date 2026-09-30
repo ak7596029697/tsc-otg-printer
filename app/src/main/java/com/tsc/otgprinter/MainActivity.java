@@ -19,6 +19,8 @@ import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.widget.Button;
 import android.widget.EditText;
@@ -40,10 +42,22 @@ public class MainActivity extends Activity {
     private Uri pdfUri;
     private UsbManager usbManager;
     private UsbDevice targetDevice;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        // অ্যাপ যেন কখনো বন্ধ না হয়ে স্ক্রিনে এরর দেখায়
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            mainHandler.post(() -> {
+                if (tvProgress != null) {
+                    tvProgress.setText("Fatal Error: " + throwable.getMessage());
+                }
+                Toast.makeText(getApplicationContext(), "Crash Prevented: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
+            });
+        });
+
         setContentView(R.layout.activity_main);
 
         tvFileInfo = findViewById(R.id.tvFileInfo);
@@ -59,10 +73,9 @@ public class MainActivity extends Activity {
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("application/pdf");
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 startActivityForResult(intent, PICK_PDF_FILE);
             } catch (Exception e) {
-                Toast.makeText(this, "File Picker Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                showToast("Picker error: " + e.getMessage());
             }
         });
 
@@ -83,79 +96,88 @@ public class MainActivity extends Activity {
             pdfUri = data.getData();
             if (pdfUri != null) {
                 try {
-                    final int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
-                    getContentResolver().takePersistableUriPermission(pdfUri, takeFlags);
-                } catch (Exception ignored) {}
-
-                try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
+                    ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
                     if (pfd != null) {
                         PdfRenderer renderer = new PdfRenderer(pfd);
-                        int totalPages = renderer.getPageCount();
+                        int count = renderer.getPageCount();
                         renderer.close();
-                        tvFileInfo.setText("PDF Loaded! Total Pages: " + totalPages);
+                        pfd.close();
+                        tvFileInfo.setText("PDF Loaded! Pages: " + count);
                         btnPrint.setEnabled(true);
                     }
                 } catch (Exception e) {
-                    tvFileInfo.setText("Error reading PDF: " + e.getMessage());
+                    tvFileInfo.setText("PDF read issue: " + e.getMessage());
                 }
             }
         }
     }
 
     private void checkUsbAndPrint() {
-        if (pdfUri == null) {
-            Toast.makeText(this, "Select a PDF first!", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        try {
+            if (pdfUri == null) {
+                showToast("Select a PDF first!");
+                return;
+            }
 
-        HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
-        targetDevice = null;
+            HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
+            targetDevice = null;
 
-        for (UsbDevice device : deviceList.values()) {
-            targetDevice = device;
-            break;
-        }
+            if (deviceList != null && !deviceList.isEmpty()) {
+                for (UsbDevice device : deviceList.values()) {
+                    targetDevice = device;
+                    break;
+                }
+            }
 
-        if (targetDevice == null) {
-            Toast.makeText(this, "Connect TSC Printer via OTG!", Toast.LENGTH_SHORT).show();
-            return;
-        }
+            if (targetDevice == null) {
+                showToast("No OTG Printer detected! Check cable.");
+                return;
+            }
 
-        if (usbManager.hasPermission(targetDevice)) {
-            runBackgroundPrint();
-        } else {
-            int flags = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) ? PendingIntent.FLAG_MUTABLE : 0;
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), flags);
-            usbManager.requestPermission(targetDevice, permissionIntent);
+            if (usbManager.hasPermission(targetDevice)) {
+                runBackgroundPrint();
+            } else {
+                int flags = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) ? PendingIntent.FLAG_MUTABLE : 0;
+                PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), flags);
+                usbManager.requestPermission(targetDevice, permissionIntent);
+            }
+        } catch (Exception e) {
+            updateStatus("Check Error: " + e.getMessage());
         }
     }
 
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         public void onReceive(Context context, Intent intent) {
-            if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
-                synchronized (this) {
-                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                        runBackgroundPrint();
-                    } else {
-                        Toast.makeText(context, "USB Permission Denied", Toast.LENGTH_SHORT).show();
+            try {
+                if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                    synchronized (this) {
+                        UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
+                            runBackgroundPrint();
+                        } else {
+                            showToast("Permission Denied for USB!");
+                        }
                     }
                 }
+            } catch (Exception e) {
+                updateStatus("Permission Error: " + e.getMessage());
             }
         }
     };
 
     private void runBackgroundPrint() {
         btnPrint.setEnabled(false);
-        tvProgress.setText("Processing print job...");
+        updateStatus("Starting print engine...");
 
         new Thread(() -> {
             ParcelFileDescriptor pfd = null;
             PdfRenderer renderer = null;
             UsbDeviceConnection connection = null;
+
             try {
                 pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
-                if (pfd == null) throw new Exception("Cannot read PDF descriptor");
+                if (pfd == null) throw new Exception("Cannot access PDF descriptor");
+
                 renderer = new PdfRenderer(pfd);
                 int total = renderer.getPageCount();
 
@@ -178,50 +200,63 @@ public class MainActivity extends Activity {
                 }
 
                 if (usbInterface == null || endpointOut == null) {
-                    throw new Exception("Printer USB Output endpoint not found!");
+                    throw new Exception("Printer OUT endpoint not recognized!");
                 }
 
                 connection = usbManager.openDevice(targetDevice);
                 if (connection == null) {
-                    throw new Exception("Unable to open USB connection to printer.");
+                    throw new Exception("USB Connection failed to open.");
                 }
 
-                connection.claimInterface(usbInterface, true);
+                boolean claimed = connection.claimInterface(usbInterface, true);
+                if (!claimed) {
+                    throw new Exception("Could not claim USB printer interface.");
+                }
 
                 for (int pageIdx : pagesToPrint) {
-                    final int currentPageNum = pageIdx + 1;
-                    runOnUiThread(() -> tvProgress.setText("Printing page " + currentPageNum + "..."));
+                    final int currPage = pageIdx + 1;
+                    updateStatus("Printing page " + currPage + " of " + pagesToPrint.size() + "...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    // 203 DPI standard label size (4x6 inch: 812x1218)
-                    Bitmap bitmap = Bitmap.createBitmap(812, 1218, Bitmap.Config.ARGB_8888);
+                    // স্ট্যান্ডার্ড 203 DPI (800x1200)
+                    Bitmap bitmap = Bitmap.createBitmap(800, 1200, Bitmap.Config.RGB_565);
                     Canvas canvas = new Canvas(bitmap);
                     canvas.drawColor(Color.WHITE);
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
                     page.close();
 
                     byte[] tsplCommands = buildTsplBitmapCommand(bitmap);
-                    connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
+                    bitmap.recycle();
+
+                    int transferResult = connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
+                    if (transferResult < 0) {
+                        throw new Exception("Data transfer failed on page " + currPage);
+                    }
                 }
 
-                runOnUiThread(() -> {
-                    tvProgress.setText("Printed successfully!");
-                    btnPrint.setEnabled(true);
-                    Toast.makeText(MainActivity.this, "Printing Completed!", Toast.LENGTH_SHORT).show();
-                });
+                updateStatus("Printed successfully!");
+                showToast("Done! All labels printed.");
 
-            } catch (final Exception e) {
-                runOnUiThread(() -> {
-                    tvProgress.setText("Error: " + e.getMessage());
-                    btnPrint.setEnabled(true);
-                    Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                });
+            } catch (Throwable e) {
+                updateStatus("Error: " + e.getMessage());
+                showToast("Failed: " + e.getMessage());
             } finally {
                 try { if (connection != null) connection.close(); } catch (Exception ignored) {}
                 try { if (renderer != null) renderer.close(); } catch (Exception ignored) {}
                 try { if (pfd != null) pfd.close(); } catch (Exception ignored) {}
+                mainHandler.post(() -> btnPrint.setEnabled(true));
             }
         }).start();
+    }
+
+    private void updateStatus(String msg) {
+        mainHandler.post(() -> {
+            if (tvProgress != null) tvProgress.setText(msg);
+        });
+    }
+
+    private void showToast(String msg) {
+        mainHandler.post(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show());
     }
 
     private List<Integer> parsePageSelection(String input, int total) {
