@@ -1,0 +1,2 @@
+rootProject.name = "TSCOTGPrinter"
+include ':app'
