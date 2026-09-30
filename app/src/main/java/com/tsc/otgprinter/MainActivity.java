@@ -22,8 +22,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,6 +41,8 @@ public class MainActivity extends Activity {
 
     private TextView tvFileInfo, tvProgress;
     private EditText etPageRange;
+    private ImageView ivPreview;
+    private Spinner spPaperSize;
     private Button btnSelectPdf, btnPrint;
     private Uri pdfUri;
     private UsbManager usbManager;
@@ -47,7 +52,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        
+
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             mainHandler.post(() -> {
                 if (tvProgress != null) {
@@ -62,8 +67,15 @@ public class MainActivity extends Activity {
         tvFileInfo = findViewById(R.id.tvFileInfo);
         tvProgress = findViewById(R.id.tvProgress);
         etPageRange = findViewById(R.id.etPageRange);
+        ivPreview = findViewById(R.id.ivPreview);
+        spPaperSize = findViewById(R.id.spPaperSize);
         btnSelectPdf = findViewById(R.id.btnSelectPdf);
         btnPrint = findViewById(R.id.btnPrint);
+
+        // ড্রপডাউন পেপার সাইজ লিস্ট সেট করা
+        String[] paperOptions = {"4x6 inch (100x150 mm) - Standard", "3x5 inch (75x125 mm)"};
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, paperOptions);
+        spPaperSize.setAdapter(adapter);
 
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
 
@@ -103,12 +115,24 @@ public class MainActivity extends Activity {
                     if (pfd != null) {
                         PdfRenderer renderer = new PdfRenderer(pfd);
                         int count = renderer.getPageCount();
+                        
+                        // ১ম পেজের প্রিভিউ স্ক্রিনে দেখানো
+                        if (count > 0) {
+                            PdfRenderer.Page page = renderer.openPage(0);
+                            Bitmap previewBmp = Bitmap.createBitmap(400, 600, Bitmap.Config.ARGB_8888);
+                            Canvas canvas = new Canvas(previewBmp);
+                            canvas.drawColor(Color.WHITE);
+                            page.render(previewBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                            page.close();
+                            ivPreview.setImageBitmap(previewBmp);
+                        }
+
                         renderer.close();
-                        tvFileInfo.setText("PDF Loaded! Pages: " + count);
+                        tvFileInfo.setText("PDF Loaded! Total Pages: " + count);
                         btnPrint.setEnabled(true);
                     }
                 } catch (Exception e) {
-                    tvFileInfo.setText("PDF read issue: " + e.getMessage());
+                    tvFileInfo.setText("PDF issue: " + e.getMessage());
                 }
             }
         }
@@ -141,7 +165,7 @@ public class MainActivity extends Activity {
             } else {
                 Intent intent = new Intent(ACTION_USB_PERMISSION);
                 intent.setPackage(getPackageName());
-                
+
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     flags |= PendingIntent.FLAG_MUTABLE;
@@ -177,6 +201,12 @@ public class MainActivity extends Activity {
     private void runBackgroundPrint() {
         btnPrint.setEnabled(false);
         updateStatus("Starting print engine...");
+
+        // ড্রপডাউন থেকে সিলেক্ট করা সাইজ অনুযায়ী মাপ নির্ধারণ
+        final boolean is3x5 = spPaperSize.getSelectedItemPosition() == 1;
+        final int targetWidth = is3x5 ? 600 : 800;
+        final int targetHeight = is3x5 ? 1000 : 1200;
+        final String sizeCmd = is3x5 ? "SIZE 75 mm, 125 mm\n" : "SIZE 100 mm, 150 mm\n";
 
         new Thread(() -> {
             ParcelFileDescriptor pfd = null;
@@ -227,17 +257,16 @@ public class MainActivity extends Activity {
                     updateStatus("Sending page " + currPage + " to printer...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    // স্ট্যান্ডার্ড 203 DPI (800x1200)
-                    Bitmap bitmap = Bitmap.createBitmap(800, 1200, Bitmap.Config.ARGB_8888);
+                    Bitmap bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(bitmap);
                     canvas.drawColor(Color.WHITE);
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
                     page.close();
 
-                    byte[] tsplCommands = buildTsplBitmapCommand(bitmap);
+                    byte[] tsplCommands = buildTsplBitmapCommand(bitmap, sizeCmd);
                     bitmap.recycle();
 
-                    // Chunked Transfer: 4096 বাইটের ছোট ব্লকে ভাগ করে পাঠানো
+                    // Chunked Transfer: 4096 বাইটের ব্লকে নিরাপদ ডেটা ট্রান্সফার
                     int offset = 0;
                     int chunkSize = 4096;
                     while (offset < tsplCommands.length) {
@@ -298,14 +327,14 @@ public class MainActivity extends Activity {
         return list;
     }
 
-    private byte[] buildTsplBitmapCommand(Bitmap bitmap) {
+    private byte[] buildTsplBitmapCommand(Bitmap bitmap, String sizeCommand) {
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
         int widthBytes = (width + 7) / 8;
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try {
-            String init = "SIZE 100 mm, 150 mm\nGAP 3 mm, 0 mm\nDIRECTION 1\nCLS\nBITMAP 0,0," + widthBytes + "," + height + ",0,";
+            String init = sizeCommand + "GAP 3 mm, 0 mm\nDIRECTION 1\nCLS\nBITMAP 0,0," + widthBytes + "," + height + ",0,";
             baos.write(init.getBytes());
 
             for (int y = 0; y < height; y++) {
@@ -316,7 +345,8 @@ public class MainActivity extends Activity {
                         if (pixelX < width) {
                             int pixel = bitmap.getPixel(pixelX, y);
                             int luminance = (int) (0.299 * ((pixel >> 16) & 0xFF) + 0.587 * ((pixel >> 8) & 0xFF) + 0.114 * (pixel & 0xFF));
-                            if (luminance < 128) {
+                            // সাদা ব্যাকগ্রাউন্ড এবং পরিষ্কার কালো বারকোড
+                            if (luminance >= 128) {
                                 b |= (1 << (7 - bit));
                             }
                         }
