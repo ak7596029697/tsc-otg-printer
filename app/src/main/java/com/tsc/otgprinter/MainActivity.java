@@ -1,5 +1,6 @@
 package com.tsc.otgprinter;
 
+import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -20,17 +21,21 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.app.Activity;
+
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.tsc.otgprinter.USB_PERMISSION";
     private static final int PICK_PDF_FILE = 1;
 
-    private TextView tvStatus, tvFileInfo;
+    private TextView tvFileInfo, tvProgress;
+    private EditText etPageRange;
     private Button btnSelectPdf, btnPrint;
     private Uri pdfUri;
     private UsbManager usbManager;
@@ -41,8 +46,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        tvStatus = findViewById(R.id.tvStatus);
         tvFileInfo = findViewById(R.id.tvFileInfo);
+        tvProgress = findViewById(R.id.tvProgress);
+        etPageRange = findViewById(R.id.etPageRange);
         btnSelectPdf = findViewById(R.id.btnSelectPdf);
         btnPrint = findViewById(R.id.btnPrint);
 
@@ -70,8 +76,17 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_PDF_FILE && resultCode == RESULT_OK && data != null) {
             pdfUri = data.getData();
-            tvFileInfo.setText("PDF Loaded! Ready to print.");
-            btnPrint.setEnabled(true);
+            try {
+                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
+                PdfRenderer renderer = new PdfRenderer(pfd);
+                int totalPages = renderer.getPageCount();
+                renderer.close();
+                pfd.close();
+                tvFileInfo.setText("PDF Loaded! Total Pages: " + totalPages);
+                btnPrint.setEnabled(true);
+            } catch (Exception e) {
+                tvFileInfo.setText("PDF read error");
+            }
         }
     }
 
@@ -85,12 +100,12 @@ public class MainActivity extends Activity {
         }
 
         if (targetDevice == null) {
-            Toast.makeText(this, "No USB/OTG Printer Detected!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Connect TSC Printer via OTG!", Toast.LENGTH_SHORT).show();
             return;
         }
 
         if (usbManager.hasPermission(targetDevice)) {
-            startPrintingProcess();
+            runBackgroundPrint();
         } else {
             PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION),
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
@@ -104,7 +119,7 @@ public class MainActivity extends Activity {
                 synchronized (this) {
                     UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                        startPrintingProcess();
+                        runBackgroundPrint();
                     } else {
                         Toast.makeText(context, "USB Permission Denied", Toast.LENGTH_SHORT).show();
                     }
@@ -113,45 +128,87 @@ public class MainActivity extends Activity {
         }
     };
 
-    private void startPrintingProcess() {
-        try {
-            ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
-            PdfRenderer renderer = new PdfRenderer(pfd);
-            int pageCount = renderer.getPageCount();
+    private void runBackgroundPrint() {
+        btnPrint.setEnabled(false);
+        tvProgress.setText("Processing print job...");
 
-            UsbInterface usbInterface = targetDevice.getInterface(0);
-            UsbEndpoint endpointOut = null;
-            for (int i = 0; i < usbInterface.getEndpointCount(); i++) {
-                UsbEndpoint ep = usbInterface.getEndpoint(i);
-                if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
-                    endpointOut = ep;
-                    break;
+        new Thread(() -> {
+            try {
+                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
+                PdfRenderer renderer = new PdfRenderer(pfd);
+                int total = renderer.getPageCount();
+
+                List<Integer> pagesToPrint = parsePageSelection(etPageRange.getText().toString().trim(), total);
+
+                UsbInterface usbInterface = targetDevice.getInterface(0);
+                UsbEndpoint endpointOut = null;
+                for (int i = 0; i < usbInterface.getEndpointCount(); i++) {
+                    UsbEndpoint ep = usbInterface.getEndpoint(i);
+                    if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
+                        endpointOut = ep;
+                        break;
+                    }
                 }
+
+                UsbDeviceConnection connection = usbManager.openDevice(targetDevice);
+                connection.claimInterface(usbInterface, true);
+
+                for (int pageIdx : pagesToPrint) {
+                    runOnUiThread(() -> tvProgress.setText("Printing page " + (pageIdx + 1) + "..."));
+
+                    PdfRenderer.Page page = renderer.openPage(pageIdx);
+                    // 203 DPI standard label size (4x6 inch)
+                    Bitmap bitmap = Bitmap.createBitmap(812, 1218, Bitmap.Config.ARGB_8888);
+                    Canvas canvas = new Canvas(bitmap);
+                    canvas.drawColor(Color.WHITE);
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    page.close();
+
+                    byte[] tsplCommands = buildTsplBitmapCommand(bitmap);
+                    connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
+                }
+
+                connection.close();
+                renderer.close();
+                pfd.close();
+
+                runOnUiThread(() -> {
+                    tvProgress.setText("Printed successfully!");
+                    btnPrint.setEnabled(true);
+                    Toast.makeText(MainActivity.this, "Printing Completed!", Toast.LENGTH_SHORT).show();
+                });
+
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    tvProgress.setText("Error: " + e.getMessage());
+                    btnPrint.setEnabled(true);
+                    Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
             }
+        }).start();
+    }
 
-            UsbDeviceConnection connection = usbManager.openDevice(targetDevice);
-            connection.claimInterface(usbInterface, true);
-
-            for (int i = 0; i < pageCount; i++) {
-                PdfRenderer.Page page = renderer.openPage(i);
-                Bitmap bitmap = Bitmap.createBitmap(812, 1218, Bitmap.Config.ARGB_8888);
-                Canvas canvas = new Canvas(bitmap);
-                canvas.drawColor(Color.WHITE);
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                page.close();
-
-                byte[] tsplCommands = buildTsplBitmapCommand(bitmap);
-                connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
-            }
-
-            connection.close();
-            renderer.close();
-            pfd.close();
-            Toast.makeText(this, "Printed " + pageCount + " labels successfully!", Toast.LENGTH_LONG).show();
-
-        } catch (Exception e) {
-            Toast.makeText(this, "Print Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+    private List<Integer> parsePageSelection(String input, int total) {
+        List<Integer> list = new ArrayList<>();
+        if (input.isEmpty()) {
+            for (int i = 0; i < total; i++) list.add(i);
+            return list;
         }
+
+        try {
+            if (input.contains("-")) {
+                String[] parts = input.split("-");
+                int start = Math.max(1, Integer.parseInt(parts[0].trim()));
+                int end = Math.min(total, Integer.parseInt(parts[1].trim()));
+                for (int i = start; i <= end; i++) list.add(i - 1);
+            } else {
+                int p = Integer.parseInt(input);
+                if (p >= 1 && p <= total) list.add(p - 1);
+            }
+        } catch (Exception e) {
+            for (int i = 0; i < total; i++) list.add(i);
+        }
+        return list;
     }
 
     private byte[] buildTsplBitmapCommand(Bitmap bitmap) {
@@ -171,10 +228,7 @@ public class MainActivity extends Activity {
                         int pixelX = x * 8 + bit;
                         if (pixelX < width) {
                             int pixel = bitmap.getPixel(pixelX, y);
-                            int red = (pixel >> 16) & 0xFF;
-                            int green = (pixel >> 8) & 0xFF;
-                            int blue = pixel & 0xFF;
-                            int luminance = (int) (0.299 * red + 0.587 * green + 0.114 * blue);
+                            int luminance = (int) (0.299 * ((pixel >> 16) & 0xFF) + 0.587 * ((pixel >> 8) & 0xFF) + 0.114 * (pixel & 0xFF));
                             if (luminance < 128) {
                                 b |= (1 << (7 - bit));
                             }
