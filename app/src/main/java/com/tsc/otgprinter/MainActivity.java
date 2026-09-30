@@ -55,10 +55,15 @@ public class MainActivity extends Activity {
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
 
         btnSelectPdf.setOnClickListener(v -> {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("application/pdf");
-            startActivityForResult(intent, PICK_PDF_FILE);
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/pdf");
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                startActivityForResult(intent, PICK_PDF_FILE);
+            } catch (Exception e) {
+                Toast.makeText(this, "File Picker Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            }
         });
 
         btnPrint.setOnClickListener(v -> checkUsbAndPrint());
@@ -76,21 +81,33 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_PDF_FILE && resultCode == RESULT_OK && data != null) {
             pdfUri = data.getData();
-            try {
-                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
-                PdfRenderer renderer = new PdfRenderer(pfd);
-                int totalPages = renderer.getPageCount();
-                renderer.close();
-                pfd.close();
-                tvFileInfo.setText("PDF Loaded! Total Pages: " + totalPages);
-                btnPrint.setEnabled(true);
-            } catch (Exception e) {
-                tvFileInfo.setText("PDF read error");
+            if (pdfUri != null) {
+                try {
+                    final int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                    getContentResolver().takePersistableUriPermission(pdfUri, takeFlags);
+                } catch (Exception ignored) {}
+
+                try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
+                    if (pfd != null) {
+                        PdfRenderer renderer = new PdfRenderer(pfd);
+                        int totalPages = renderer.getPageCount();
+                        renderer.close();
+                        tvFileInfo.setText("PDF Loaded! Total Pages: " + totalPages);
+                        btnPrint.setEnabled(true);
+                    }
+                } catch (Exception e) {
+                    tvFileInfo.setText("Error reading PDF: " + e.getMessage());
+                }
             }
         }
     }
 
     private void checkUsbAndPrint() {
+        if (pdfUri == null) {
+            Toast.makeText(this, "Select a PDF first!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
         targetDevice = null;
 
@@ -107,8 +124,8 @@ public class MainActivity extends Activity {
         if (usbManager.hasPermission(targetDevice)) {
             runBackgroundPrint();
         } else {
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION),
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
+            int flags = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) ? PendingIntent.FLAG_MUTABLE : 0;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), flags);
             usbManager.requestPermission(targetDevice, permissionIntent);
         }
     }
@@ -133,31 +150,50 @@ public class MainActivity extends Activity {
         tvProgress.setText("Processing print job...");
 
         new Thread(() -> {
+            ParcelFileDescriptor pfd = null;
+            PdfRenderer renderer = null;
+            UsbDeviceConnection connection = null;
             try {
-                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
-                PdfRenderer renderer = new PdfRenderer(pfd);
+                pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
+                if (pfd == null) throw new Exception("Cannot read PDF descriptor");
+                renderer = new PdfRenderer(pfd);
                 int total = renderer.getPageCount();
 
                 List<Integer> pagesToPrint = parsePageSelection(etPageRange.getText().toString().trim(), total);
 
-                UsbInterface usbInterface = targetDevice.getInterface(0);
+                UsbInterface usbInterface = null;
                 UsbEndpoint endpointOut = null;
-                for (int i = 0; i < usbInterface.getEndpointCount(); i++) {
-                    UsbEndpoint ep = usbInterface.getEndpoint(i);
-                    if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
-                        endpointOut = ep;
-                        break;
+
+                for (int i = 0; i < targetDevice.getInterfaceCount(); i++) {
+                    UsbInterface uif = targetDevice.getInterface(i);
+                    for (int j = 0; j < uif.getEndpointCount(); j++) {
+                        UsbEndpoint ep = uif.getEndpoint(j);
+                        if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
+                            usbInterface = uif;
+                            endpointOut = ep;
+                            break;
+                        }
                     }
+                    if (endpointOut != null) break;
                 }
 
-                UsbDeviceConnection connection = usbManager.openDevice(targetDevice);
+                if (usbInterface == null || endpointOut == null) {
+                    throw new Exception("Printer USB Output endpoint not found!");
+                }
+
+                connection = usbManager.openDevice(targetDevice);
+                if (connection == null) {
+                    throw new Exception("Unable to open USB connection to printer.");
+                }
+
                 connection.claimInterface(usbInterface, true);
 
                 for (int pageIdx : pagesToPrint) {
-                    runOnUiThread(() -> tvProgress.setText("Printing page " + (pageIdx + 1) + "..."));
+                    final int currentPageNum = pageIdx + 1;
+                    runOnUiThread(() -> tvProgress.setText("Printing page " + currentPageNum + "..."));
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    // 203 DPI standard label size (4x6 inch)
+                    // 203 DPI standard label size (4x6 inch: 812x1218)
                     Bitmap bitmap = Bitmap.createBitmap(812, 1218, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(bitmap);
                     canvas.drawColor(Color.WHITE);
@@ -168,29 +204,29 @@ public class MainActivity extends Activity {
                     connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
                 }
 
-                connection.close();
-                renderer.close();
-                pfd.close();
-
                 runOnUiThread(() -> {
                     tvProgress.setText("Printed successfully!");
                     btnPrint.setEnabled(true);
                     Toast.makeText(MainActivity.this, "Printing Completed!", Toast.LENGTH_SHORT).show();
                 });
 
-            } catch (Exception e) {
+            } catch (final Exception e) {
                 runOnUiThread(() -> {
                     tvProgress.setText("Error: " + e.getMessage());
                     btnPrint.setEnabled(true);
                     Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
+            } finally {
+                try { if (connection != null) connection.close(); } catch (Exception ignored) {}
+                try { if (renderer != null) renderer.close(); } catch (Exception ignored) {}
+                try { if (pfd != null) pfd.close(); } catch (Exception ignored) {}
             }
         }).start();
     }
 
     private List<Integer> parsePageSelection(String input, int total) {
         List<Integer> list = new ArrayList<>();
-        if (input.isEmpty()) {
+        if (input == null || input.isEmpty()) {
             for (int i = 0; i < total; i++) list.add(i);
             return list;
         }
