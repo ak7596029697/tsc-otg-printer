@@ -19,14 +19,17 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
 
-    - name: Build with Gradle
-      run: gradle assembleDebug
+    - name: Generate Wrapper and Build
+      run: |
+        gradle wrapper --gradle-version 8.5
+        ./gradlew assembleDebug --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: TSC-Printer-App
         path: app/build/outputs/apk/debug/*.apk
+        
