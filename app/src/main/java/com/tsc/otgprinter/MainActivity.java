@@ -139,7 +139,6 @@ public class MainActivity extends Activity {
             if (usbManager.hasPermission(targetDevice)) {
                 runBackgroundPrint();
             } else {
-                // অ্যান্ড্রয়েড ১৪ (U+) এর জন্য এক্সপ্লিসিট Intent ও সঠিক ফ্ল্যাগ
                 Intent intent = new Intent(ACTION_USB_PERMISSION);
                 intent.setPackage(getPackageName());
                 
@@ -228,8 +227,8 @@ public class MainActivity extends Activity {
                     updateStatus("Printing page " + currPage + " of " + pagesToPrint.size() + "...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    // স্ট্যান্ডার্ড 203 DPI (800x1200)
-                    Bitmap bitmap = Bitmap.createBitmap(800, 1200, Bitmap.Config.RGB_565);
+                    // স্ট্যান্ডার্ড 203 DPI (ARGB_8888 বাধ্যতামূলক)
+                    Bitmap bitmap = Bitmap.createBitmap(800, 1200, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(bitmap);
                     canvas.drawColor(Color.WHITE);
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
