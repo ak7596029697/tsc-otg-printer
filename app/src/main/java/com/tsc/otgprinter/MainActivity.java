@@ -22,11 +22,11 @@ import android.os.ParcelFileDescriptor;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
+import android.app.Activity;
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.tsc.otgprinter.USB_PERMISSION";
     private static final int PICK_PDF_FILE = 1;
 
@@ -58,7 +58,11 @@ public class MainActivity extends AppCompatActivity {
         btnPrint.setOnClickListener(v -> checkUsbAndPrint());
 
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
-        registerReceiver(usbReceiver, filter);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(usbReceiver, filter);
+        }
     }
 
     @Override
@@ -130,7 +134,6 @@ public class MainActivity extends AppCompatActivity {
 
             for (int i = 0; i < pageCount; i++) {
                 PdfRenderer.Page page = renderer.openPage(i);
-                // 4x6 inch at 203 DPI = 812 x 1218 dots
                 Bitmap bitmap = Bitmap.createBitmap(812, 1218, Bitmap.Config.ARGB_8888);
                 Canvas canvas = new Canvas(bitmap);
                 canvas.drawColor(Color.WHITE);
@@ -190,4 +193,4 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         try { unregisterReceiver(usbReceiver); } catch (Exception ignored) {}
     }
-        }
+}
