@@ -1,42 +1,86 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="20dp"
-    android:gravity="center">
+    android:background="#F8FAFC">
 
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="TSC TE244 OTG Printer"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="30dp" />
-
-    <Button
-        android:id="@+id/btnSelectPdf"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="1. Select PDF File"
-        android:textSize="18sp"
-        android:layout_marginBottom="20dp" />
-
-    <TextView
-        android:id="@+id/tvFileInfo"
-        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="No PDF Selected"
-        android:layout_marginBottom="30dp" />
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_horizontal">
 
-    <Button
-        android:id="@+id/btnPrint"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="2. Print All Labels (OTG)"
-        android:textSize="18sp"
-        android:backgroundTint="#4CAF50"
-        android:enabled="false" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="NxtBe Label Printer"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:textColor="#0F172A"
+            android:layout_marginTop="16dp" />
 
-</LinearLayout>
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="TSC TE244 OTG Utility"
+            android:textSize="14sp"
+            android:textColor="#64748B"
+            android:layout_marginBottom="24dp" />
+
+        <Button
+            android:id="@+id/btnSelectPdf"
+            android:layout_width="match_parent"
+            android:layout_height="55dp"
+            android:text="Select Shipping PDF"
+            android:textSize="16sp"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:id="@+id/tvFileInfo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="No PDF file selected"
+            android:textSize="14sp"
+            android:textColor="#334155"
+            android:layout_marginBottom="24dp" />
+
+        <!-- পেজ সিলেক্ট করার বক্স -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pages to Print (e.g. 1-3 or 2 or leave empty for All):"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="#475569"
+            android:layout_marginBottom="6dp" />
+
+        <EditText
+            android:id="@+id/etPageRange"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:background="#FFFFFF"
+            android:hint="All pages (or type 1-5, 2, etc.)"
+            android:padding="12dp"
+            android:textSize="15sp"
+            android:layout_marginBottom="24dp" />
+
+        <Button
+            android:id="@+id/btnPrint"
+            android:layout_width="match_parent"
+            android:layout_height="55dp"
+            android:text="Print Labels"
+            android:textSize="16sp"
+            android:enabled="false"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:id="@+id/tvProgress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="14sp"
+            android:textColor="#2563EB" />
+
+    </LinearLayout>
+</ScrollView>
