@@ -48,13 +48,12 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        // অ্যাপ যেন কখনো বন্ধ না হয়ে স্ক্রিনে এরর দেখায়
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             mainHandler.post(() -> {
                 if (tvProgress != null) {
-                    tvProgress.setText("Fatal Error: " + throwable.getMessage());
+                    tvProgress.setText("Fatal: " + throwable.getMessage());
                 }
-                Toast.makeText(getApplicationContext(), "Crash Prevented: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(getApplicationContext(), "Error: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
             });
         });
 
@@ -73,6 +72,7 @@ public class MainActivity extends Activity {
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("application/pdf");
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 startActivityForResult(intent, PICK_PDF_FILE);
             } catch (Exception e) {
                 showToast("Picker error: " + e.getMessage());
@@ -96,12 +96,14 @@ public class MainActivity extends Activity {
             pdfUri = data.getData();
             if (pdfUri != null) {
                 try {
-                    ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r");
+                    getContentResolver().takePersistableUriPermission(pdfUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Exception ignored) {}
+
+                try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
                     if (pfd != null) {
                         PdfRenderer renderer = new PdfRenderer(pfd);
                         int count = renderer.getPageCount();
                         renderer.close();
-                        pfd.close();
                         tvFileInfo.setText("PDF Loaded! Pages: " + count);
                         btnPrint.setEnabled(true);
                     }
@@ -137,8 +139,16 @@ public class MainActivity extends Activity {
             if (usbManager.hasPermission(targetDevice)) {
                 runBackgroundPrint();
             } else {
-                int flags = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) ? PendingIntent.FLAG_MUTABLE : 0;
-                PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), flags);
+                // অ্যান্ড্রয়েড ১৪ (U+) এর জন্য এক্সপ্লিসিট Intent ও সঠিক ফ্ল্যাগ
+                Intent intent = new Intent(ACTION_USB_PERMISSION);
+                intent.setPackage(getPackageName());
+                
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    flags |= PendingIntent.FLAG_MUTABLE;
+                }
+
+                PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, intent, flags);
                 usbManager.requestPermission(targetDevice, permissionIntent);
             }
         } catch (Exception e) {
