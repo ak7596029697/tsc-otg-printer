@@ -7,7 +7,7 @@
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/ic_menu_agenda"
-        android:label="TSC OTG Printer"
+        android:label="NxtBe Label Printer"
         android:theme="@android:style/Theme.DeviceDefault.Light">
         <activity
             android:name=".MainActivity"
