@@ -224,10 +224,10 @@ public class MainActivity extends Activity {
 
                 for (int pageIdx : pagesToPrint) {
                     final int currPage = pageIdx + 1;
-                    updateStatus("Printing page " + currPage + " of " + pagesToPrint.size() + "...");
+                    updateStatus("Sending page " + currPage + " to printer...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    // স্ট্যান্ডার্ড 203 DPI (ARGB_8888 বাধ্যতামূলক)
+                    // স্ট্যান্ডার্ড 203 DPI (800x1200)
                     Bitmap bitmap = Bitmap.createBitmap(800, 1200, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(bitmap);
                     canvas.drawColor(Color.WHITE);
@@ -237,14 +237,21 @@ public class MainActivity extends Activity {
                     byte[] tsplCommands = buildTsplBitmapCommand(bitmap);
                     bitmap.recycle();
 
-                    int transferResult = connection.bulkTransfer(endpointOut, tsplCommands, tsplCommands.length, 10000);
-                    if (transferResult < 0) {
-                        throw new Exception("Data transfer failed on page " + currPage);
+                    // Chunked Transfer: 4096 বাইটের ছোট ব্লকে ভাগ করে পাঠানো
+                    int offset = 0;
+                    int chunkSize = 4096;
+                    while (offset < tsplCommands.length) {
+                        int len = Math.min(chunkSize, tsplCommands.length - offset);
+                        int res = connection.bulkTransfer(endpointOut, tsplCommands, offset, len, 5000);
+                        if (res < 0) {
+                            throw new Exception("USB Transfer error at block offset: " + offset);
+                        }
+                        offset += res;
                     }
                 }
 
                 updateStatus("Printed successfully!");
-                showToast("Done! All labels printed.");
+                showToast("Done! Printed successfully.");
 
             } catch (Throwable e) {
                 updateStatus("Error: " + e.getMessage());
