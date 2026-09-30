@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-feature android:name="android.hardware.usb.host" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-permission android:name="android.permission.USB_PERMISSION" />
 
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/ic_menu_agenda"
         android:label="TSC OTG Printer"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.Light">
         <activity
             android:name=".MainActivity"
             android:exported="true">
