@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.pdf.PdfRenderer;
 import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
@@ -39,15 +40,18 @@ public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.tsc.otgprinter.USB_PERMISSION";
     private static final int PICK_PDF_FILE = 1;
 
-    private TextView tvFileInfo, tvProgress;
+    private TextView tvFileInfo, tvProgress, tvPageIndicator;
     private EditText etPageRange;
     private ImageView ivPreview;
     private Spinner spPaperSize;
-    private Button btnSelectPdf, btnPrint;
+    private Button btnSelectPdf, btnPrint, btnPrevPage, btnNextPage;
     private Uri pdfUri;
     private UsbManager usbManager;
     private UsbDevice targetDevice;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private int totalPdfPages = 0;
+    private int currentPreviewPage = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -66,13 +70,15 @@ public class MainActivity extends Activity {
 
         tvFileInfo = findViewById(R.id.tvFileInfo);
         tvProgress = findViewById(R.id.tvProgress);
+        tvPageIndicator = findViewById(R.id.tvPageIndicator);
         etPageRange = findViewById(R.id.etPageRange);
         ivPreview = findViewById(R.id.ivPreview);
         spPaperSize = findViewById(R.id.spPaperSize);
         btnSelectPdf = findViewById(R.id.btnSelectPdf);
         btnPrint = findViewById(R.id.btnPrint);
+        btnPrevPage = findViewById(R.id.btnPrevPage);
+        btnNextPage = findViewById(R.id.btnNextPage);
 
-        // ড্রপডাউন পেপার সাইজ লিস্ট সেট করা
         String[] paperOptions = {"4x6 inch (100x150 mm) - Standard", "3x5 inch (75x125 mm)"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, paperOptions);
         spPaperSize.setAdapter(adapter);
@@ -88,6 +94,20 @@ public class MainActivity extends Activity {
                 startActivityForResult(intent, PICK_PDF_FILE);
             } catch (Exception e) {
                 showToast("Picker error: " + e.getMessage());
+            }
+        });
+
+        btnPrevPage.setOnClickListener(v -> {
+            if (currentPreviewPage > 0) {
+                currentPreviewPage--;
+                renderPreviewPage(currentPreviewPage);
+            }
+        });
+
+        btnNextPage.setOnClickListener(v -> {
+            if (currentPreviewPage < totalPdfPages - 1) {
+                currentPreviewPage++;
+                renderPreviewPage(currentPreviewPage);
             }
         });
 
@@ -114,21 +134,13 @@ public class MainActivity extends Activity {
                 try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
                     if (pfd != null) {
                         PdfRenderer renderer = new PdfRenderer(pfd);
-                        int count = renderer.getPageCount();
-                        
-                        // ১ম পেজের প্রিভিউ স্ক্রিনে দেখানো
-                        if (count > 0) {
-                            PdfRenderer.Page page = renderer.openPage(0);
-                            Bitmap previewBmp = Bitmap.createBitmap(400, 600, Bitmap.Config.ARGB_8888);
-                            Canvas canvas = new Canvas(previewBmp);
-                            canvas.drawColor(Color.WHITE);
-                            page.render(previewBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                            page.close();
-                            ivPreview.setImageBitmap(previewBmp);
-                        }
-
+                        totalPdfPages = renderer.getPageCount();
                         renderer.close();
-                        tvFileInfo.setText("PDF Loaded! Total Pages: " + count);
+
+                        currentPreviewPage = 0;
+                        renderPreviewPage(currentPreviewPage);
+
+                        tvFileInfo.setText("PDF Loaded! Total Pages: " + totalPdfPages);
                         btnPrint.setEnabled(true);
                     }
                 } catch (Exception e) {
@@ -136,6 +148,29 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    private void renderPreviewPage(int pageIndex) {
+        if (pdfUri == null || totalPdfPages == 0) return;
+        try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
+            if (pfd != null) {
+                PdfRenderer renderer = new PdfRenderer(pfd);
+                PdfRenderer.Page page = renderer.openPage(pageIndex);
+
+                Bitmap previewBmp = Bitmap.createBitmap(400, 600, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(previewBmp);
+                canvas.drawColor(Color.WHITE);
+                page.render(previewBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                page.close();
+                renderer.close();
+
+                ivPreview.setImageBitmap(previewBmp);
+                tvPageIndicator.setText("Page " + (pageIndex + 1) + "/" + totalPdfPages);
+
+                btnPrevPage.setEnabled(pageIndex > 0);
+                btnNextPage.setEnabled(pageIndex < totalPdfPages - 1);
+            }
+        } catch (Exception ignored) {}
     }
 
     private void checkUsbAndPrint() {
@@ -202,10 +237,11 @@ public class MainActivity extends Activity {
         btnPrint.setEnabled(false);
         updateStatus("Starting print engine...");
 
-        // ড্রপডাউন থেকে সিলেক্ট করা সাইজ অনুযায়ী মাপ নির্ধারণ
         final boolean is3x5 = spPaperSize.getSelectedItemPosition() == 1;
-        final int targetWidth = is3x5 ? 600 : 800;
-        final int targetHeight = is3x5 ? 1000 : 1200;
+        // ৩x৫ পেপারের জন্য মার্জিন ও সাইজ অ্যাডজাস্টমেন্ট
+        final int canvasWidth = is3x5 ? 600 : 800;
+        final int canvasHeight = is3x5 ? 1000 : 1200;
+        final int renderHeight = is3x5 ? 930 : 1200; // নিচে মার্জিন দেওয়ার জন্য রেন্ডার হাইট কমানো হলো
         final String sizeCmd = is3x5 ? "SIZE 75 mm, 125 mm\n" : "SIZE 100 mm, 150 mm\n";
 
         new Thread(() -> {
@@ -257,16 +293,26 @@ public class MainActivity extends Activity {
                     updateStatus("Sending page " + currPage + " to printer...");
 
                     PdfRenderer.Page page = renderer.openPage(pageIdx);
-                    Bitmap bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
-                    Canvas canvas = new Canvas(bitmap);
+                    Bitmap fullCanvas = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888);
+                    Canvas canvas = new Canvas(fullCanvas);
                     canvas.drawColor(Color.WHITE);
-                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+
+                    if (is3x5) {
+                        // মার্জিন রাখার জন্য পেজটিকে উপরে রেন্ডার করে নিচের দিকে পর্যাপ্ত ফাঁকা রাখা হলো
+                        Bitmap tempBmp = Bitmap.createBitmap(canvasWidth, renderHeight, Bitmap.Config.ARGB_8888);
+                        Canvas tempCanvas = new Canvas(tempBmp);
+                        tempCanvas.drawColor(Color.WHITE);
+                        page.render(tempBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                        canvas.drawBitmap(tempBmp, 0, 15, null);
+                        tempBmp.recycle();
+                    } else {
+                        page.render(fullCanvas, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    }
                     page.close();
 
-                    byte[] tsplCommands = buildTsplBitmapCommand(bitmap, sizeCmd);
-                    bitmap.recycle();
+                    byte[] tsplCommands = buildTsplBitmapCommand(fullCanvas, sizeCmd);
+                    fullCanvas.recycle();
 
-                    // Chunked Transfer: 4096 বাইটের ব্লকে নিরাপদ ডেটা ট্রান্সফার
                     int offset = 0;
                     int chunkSize = 4096;
                     while (offset < tsplCommands.length) {
@@ -345,7 +391,6 @@ public class MainActivity extends Activity {
                         if (pixelX < width) {
                             int pixel = bitmap.getPixel(pixelX, y);
                             int luminance = (int) (0.299 * ((pixel >> 16) & 0xFF) + 0.587 * ((pixel >> 8) & 0xFF) + 0.114 * (pixel & 0xFF));
-                            // সাদা ব্যাকগ্রাউন্ড এবং পরিষ্কার কালো বারকোড
                             if (luminance >= 128) {
                                 b |= (1 << (7 - bit));
                             }
