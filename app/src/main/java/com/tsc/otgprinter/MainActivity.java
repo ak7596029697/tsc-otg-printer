@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -24,6 +25,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -40,8 +43,10 @@ import java.util.List;
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.tsc.otgprinter.USB_PERMISSION";
     private static final int PICK_PDF_FILE = 1;
+    private static final String PREF_NAME = "ThermalPrinterPref";
+    private static final String KEY_PAPER_INDEX = "saved_paper_index";
 
-    private TextView tvFileInfo, tvProgress, tvPageIndicator;
+    private TextView tvFileInfo, tvProgress, tvPageIndicator, tvCurrentPaperSize;
     private EditText etPageRange;
     private ImageView ivPreview;
     private Spinner spPaperSize;
@@ -49,10 +54,29 @@ public class MainActivity extends Activity {
     private Uri pdfUri;
     private UsbManager usbManager;
     private UsbDevice targetDevice;
+    private SharedPreferences sharedPreferences;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private int totalPdfPages = 0;
     private int currentPreviewPage = 0;
+
+    // পেপার সাইজের তালিকা (3x5 প্রথমে রাখা হয়েছে)
+    private final String[] paperOptions = {
+        "3x5 inch (75x125 mm)",
+        "4x6 inch (100x150 mm) - Standard",
+        "4x4 inch (100x100 mm)",
+        "2x4 inch (50x100 mm)",
+        "4x2 inch (100x50 mm)"
+    };
+
+    // প্রিন্টার ডটস এবং মিলিমিটার মাপ
+    private final int[][] paperDimensionsMm = {
+        {75, 125},  // 3x5
+        {100, 150}, // 4x6
+        {100, 100}, // 4x4
+        {50, 100},  // 2x4
+        {100, 50}   // 4x2
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +96,7 @@ public class MainActivity extends Activity {
         tvFileInfo = findViewById(R.id.tvFileInfo);
         tvProgress = findViewById(R.id.tvProgress);
         tvPageIndicator = findViewById(R.id.tvPageIndicator);
+        tvCurrentPaperSize = findViewById(R.id.tvCurrentPaperSize);
         etPageRange = findViewById(R.id.etPageRange);
         ivPreview = findViewById(R.id.ivPreview);
         spPaperSize = findViewById(R.id.spPaperSize);
@@ -80,9 +105,37 @@ public class MainActivity extends Activity {
         btnPrevPage = findViewById(R.id.btnPrevPage);
         btnNextPage = findViewById(R.id.btnNextPage);
 
-        String[] paperOptions = {"4x6 inch (100x150 mm) - Standard", "3x5 inch (75x125 mm)"};
+        sharedPreferences = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+
+        // স্পিনার ড্রপডাউন ও মেমরি সেটআপ
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, paperOptions);
         spPaperSize.setAdapter(adapter);
+
+        // শেষবার সেভ করা সাইজ লোড করা
+        int savedIndex = sharedPreferences.getInt(KEY_PAPER_INDEX, 0);
+        if (savedIndex >= paperOptions.length) savedIndex = 0;
+        spPaperSize.setSelection(savedIndex);
+        updateBannerDisplay(savedIndex);
+
+        spPaperSize.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateBannerDisplay(position);
+
+                // মেমরিতে পাকাপাকি সেভ
+                SharedPreferences.Editor editor = sharedPreferences.edit();
+                editor.putInt(KEY_PAPER_INDEX, position);
+                editor.apply();
+
+                // সাইজ বদলালে প্রিভিউ রিফ্রেশ করা
+                if (pdfUri != null && totalPdfPages > 0) {
+                    renderPreviewPage(currentPreviewPage);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
 
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
 
@@ -119,6 +172,12 @@ public class MainActivity extends Activity {
             registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(usbReceiver, filter);
+        }
+    }
+
+    private void updateBannerDisplay(int index) {
+        if (tvCurrentPaperSize != null) {
+            tvCurrentPaperSize.setText("Active Label: " + paperOptions[index]);
         }
     }
 
@@ -159,7 +218,15 @@ public class MainActivity extends Activity {
                 PdfRenderer renderer = new PdfRenderer(pfd);
                 PdfRenderer.Page page = renderer.openPage(pageIndex);
 
-                Bitmap renderedBmp = renderPageAutoRotated(page, 400, 600);
+                int selectedIndex = spPaperSize.getSelectedItemPosition();
+                int widthMm = paperDimensionsMm[selectedIndex][0];
+                int heightMm = paperDimensionsMm[selectedIndex][1];
+
+                // প্রিভিউ স্কেলিং
+                int previewW = (widthMm * 4);
+                int previewH = (heightMm * 4);
+
+                Bitmap renderedBmp = renderPageAutoRotated(page, previewW, previewH);
                 page.close();
                 renderer.close();
 
@@ -178,7 +245,6 @@ public class MainActivity extends Activity {
         int ph = page.getHeight();
         boolean isLandscape = pw > ph;
 
-        // ল্যান্ডস্কেপ হলে মাপ উল্টে রেন্ডার করা হবে যাতে বিকৃত না হয়
         int rw = isLandscape ? targetH : targetW;
         int rh = isLandscape ? targetW : targetH;
 
@@ -262,11 +328,15 @@ public class MainActivity extends Activity {
         btnPrint.setEnabled(false);
         updateStatus("Starting print engine...");
 
-        final boolean is3x5 = spPaperSize.getSelectedItemPosition() == 1;
-        final int targetWidth = is3x5 ? 600 : 800;
-        final int targetHeight = is3x5 ? 930 : 1200;
-        final int finalCanvasHeight = is3x5 ? 1000 : 1200;
-        final String sizeCmd = is3x5 ? "SIZE 75 mm, 125 mm\n" : "SIZE 100 mm, 150 mm\n";
+        int selectedIndex = spPaperSize.getSelectedItemPosition();
+        int widthMm = paperDimensionsMm[selectedIndex][0];
+        int heightMm = paperDimensionsMm[selectedIndex][1];
+
+        // 203 DPI: 1 mm = 8 dots
+        final int targetWidth = widthMm * 8;
+        final int targetHeight = (int) (heightMm * 7.5); // ব্যালেন্সড হাইট রেন্ডারিং
+        final int finalCanvasHeight = heightMm * 8;
+        final String sizeCmd = "SIZE " + widthMm + " mm, " + heightMm + " mm\n";
 
         new Thread(() -> {
             ParcelFileDescriptor pfd = null;
@@ -323,8 +393,10 @@ public class MainActivity extends Activity {
                     Bitmap printCanvas = Bitmap.createBitmap(targetWidth, finalCanvasHeight, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(printCanvas);
                     canvas.drawColor(Color.WHITE);
-                    // ৩x৫ পেপারের জন্য উপরে ও নিচে মার্জিন অ্যাডজাস্ট
-                    int topOffset = is3x5 ? 15 : 0;
+
+                    // টপ মার্জিন অ্যাডজাস্ট
+                    int topOffset = (finalCanvasHeight - targetHeight) / 2;
+                    if (topOffset < 0) topOffset = 0;
                     canvas.drawBitmap(labelBitmap, 0, topOffset, null);
                     labelBitmap.recycle();
 
