@@ -11,7 +11,9 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.pdf.PdfRenderer;
 import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
@@ -334,7 +336,7 @@ public class MainActivity extends Activity {
 
         // 203 DPI: 1 mm = 8 dots
         final int targetWidth = widthMm * 8;
-        final int targetHeight = (int) (heightMm * 7.5); // ব্যালেন্সড হাইট রেন্ডারিং
+        final int targetHeight = (int) (heightMm * 7.5);
         final int finalCanvasHeight = heightMm * 8;
         final String sizeCmd = "SIZE " + widthMm + " mm, " + heightMm + " mm\n";
 
@@ -399,6 +401,16 @@ public class MainActivity extends Activity {
                     if (topOffset < 0) topOffset = 0;
                     canvas.drawBitmap(labelBitmap, 0, topOffset, null);
                     labelBitmap.recycle();
+
+                    // কাগজের একদম নিচে মার্জিনে পেজ নম্বর প্রিন্ট (যেমন: Pg: 1/15)
+                    Paint pageNumPaint = new Paint();
+                    pageNumPaint.setColor(Color.BLACK);
+                    pageNumPaint.setTextSize(20);
+                    pageNumPaint.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+                    pageNumPaint.setTextAlign(Paint.Align.RIGHT);
+
+                    String pageText = "Pg: " + currPage + "/" + total;
+                    canvas.drawText(pageText, targetWidth - 25, finalCanvasHeight - 12, pageNumPaint);
 
                     byte[] tsplCommands = buildTsplBitmapCommand(printCanvas, sizeCmd);
                     printCanvas.recycle();
