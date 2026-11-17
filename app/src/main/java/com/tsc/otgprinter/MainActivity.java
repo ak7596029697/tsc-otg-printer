@@ -12,6 +12,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.pdf.PdfRenderer;
 import android.hardware.usb.UsbConstants;
@@ -64,6 +65,7 @@ public class MainActivity extends Activity {
     private int currentPreviewPage = 0;
     private int currentZoomPercent = 100; // ডিফল্ট ১০০% জুম
 
+    // পেপার সাইজের তালিকা (3x5 প্রথমে রাখা হয়েছে)
     private final String[] paperOptions = {
         "3x5 inch (75x125 mm)",
         "4x6 inch (100x150 mm) - Standard",
@@ -72,6 +74,7 @@ public class MainActivity extends Activity {
         "4x2 inch (100x50 mm)"
     };
 
+    // প্রিন্টার ডটস এবং মিলিমিটার মাপ
     private final int[][] paperDimensionsMm = {
         {75, 125},  // 3x5
         {100, 150}, // 4x6
@@ -112,9 +115,11 @@ public class MainActivity extends Activity {
 
         sharedPreferences = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
 
+        // স্পিনার ড্রপডাউন ও মেমরি সেটআপ
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, paperOptions);
         spPaperSize.setAdapter(adapter);
 
+        // শেষবার সেভ করা সাইজ লোড করা
         int savedIndex = sharedPreferences.getInt(KEY_PAPER_INDEX, 0);
         if (savedIndex >= paperOptions.length) savedIndex = 0;
         spPaperSize.setSelection(savedIndex);
@@ -124,10 +129,13 @@ public class MainActivity extends Activity {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateBannerDisplay(position);
+
+                // মেমরিতে পাকাপাকি সেভ
                 SharedPreferences.Editor editor = sharedPreferences.edit();
                 editor.putInt(KEY_PAPER_INDEX, position);
                 editor.apply();
 
+                // সাইজ বদলালে প্রিভিউ রিফ্রেশ করা
                 if (pdfUri != null && totalPdfPages > 0) {
                     renderPreviewPage(currentPreviewPage);
                 }
@@ -142,7 +150,7 @@ public class MainActivity extends Activity {
             sbZoom.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                    currentZoomPercent = 50 + progress; // 0->50%, 50->100%, 80->130%
+                    currentZoomPercent = 50 + progress;
                     if (tvZoomLevel != null) {
                         tvZoomLevel.setText("Zoom: " + currentZoomPercent + "%");
                     }
@@ -163,7 +171,7 @@ public class MainActivity extends Activity {
         if (btnResetZoom != null) {
             btnResetZoom.setOnClickListener(v -> {
                 if (sbZoom != null) {
-                    sbZoom.setProgress(50); // 50 + 50 = 100%
+                    sbZoom.setProgress(50);
                 }
             });
         }
@@ -241,7 +249,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // প্রিভিউ স্ক্রিনেও জুম ইন/আউট অবস্থায় কেমন দেখাবে তা দেখানো
+    // প্রিভিউতেও সঠিক অনুপাতে ঘোরানো ও জুম করা ছবি দেখানো
     private void renderPreviewPage(int pageIndex) {
         if (pdfUri == null || totalPdfPages == 0) return;
         try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
@@ -253,26 +261,26 @@ public class MainActivity extends Activity {
                 int widthMm = paperDimensionsMm[selectedIndex][0];
                 int heightMm = paperDimensionsMm[selectedIndex][1];
 
-                int canvasW = widthMm * 4;
-                int canvasH = heightMm * 4;
+                // প্রিভিউ স্কেলিং ও জুম হিসাব
+                int previewW = (widthMm * 4);
+                int previewH = (heightMm * 4);
 
                 float scaleFactor = currentZoomPercent / 100.0f;
-                int scaledW = Math.max(20, (int) (canvasW * scaleFactor));
-                int scaledH = Math.max(20, (int) (canvasH * scaleFactor));
+                int scaledW = Math.max(20, (int) (previewW * scaleFactor));
+                int scaledH = Math.max(20, (int) (previewH * scaleFactor));
 
-                Bitmap labelBmp = renderPageAutoRotated(page, scaledW, scaledH);
+                Bitmap renderedBmp = renderPageAutoRotated(page, scaledW, scaledH);
                 page.close();
                 renderer.close();
 
-                // পেজের মাঝখানে জুম করা লেবেল বসানো
-                Bitmap previewCanvasBmp = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888);
+                Bitmap previewCanvasBmp = Bitmap.createBitmap(previewW, previewH, Bitmap.Config.ARGB_8888);
                 Canvas canvas = new Canvas(previewCanvasBmp);
                 canvas.drawColor(Color.WHITE);
 
-                int leftOffset = (canvasW - scaledW) / 2;
-                int topOffset = (canvasH - scaledH) / 2;
-                canvas.drawBitmap(labelBmp, leftOffset, topOffset, null);
-                labelBmp.recycle();
+                int leftOffset = (previewW - scaledW) / 2;
+                int topOffset = (previewH - scaledH) / 2;
+                canvas.drawBitmap(renderedBmp, leftOffset, topOffset, null);
+                renderedBmp.recycle();
 
                 ivPreview.setImageBitmap(previewCanvasBmp);
                 tvPageIndicator.setText("Page " + (pageIndex + 1) + "/" + totalPdfPages);
@@ -283,6 +291,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    // পেজ যদি ল্যান্ডস্কেপ (Meesho) হয় তবে অটোমেটিক ৯০ ডিগ্রি ঘুরিয়ে নিখুঁত খাড়া করার মেথড
     private Bitmap renderPageAutoRotated(PdfRenderer.Page page, int targetW, int targetH) {
         int pw = page.getWidth();
         int ph = page.getHeight();
@@ -376,13 +385,14 @@ public class MainActivity extends Activity {
         int heightMm = paperDimensionsMm[selectedIndex][1];
 
         // 203 DPI: 1 mm = 8 dots
-        final int finalCanvasWidth = widthMm * 8;
+        final int targetWidth = widthMm * 8;
+        final int targetHeight = (int) (heightMm * 7.4);
         final int finalCanvasHeight = heightMm * 8;
         final float scaleFactor = currentZoomPercent / 100.0f;
 
-        // জুম স্কেল অনুযায়ী লেবেলের আসল মাপ নির্ধারণ
-        final int scaledWidth = Math.max(40, (int) (finalCanvasWidth * scaleFactor));
-        final int scaledHeight = Math.max(40, (int) ((heightMm * 7.4) * scaleFactor));
+        // জুম স্কেল অনুযায়ী লেবেলের প্রিন্ট সাইজ
+        final int scaledWidth = Math.max(40, (int) (targetWidth * scaleFactor));
+        final int scaledHeight = Math.max(40, (int) (targetHeight * scaleFactor));
 
         final String sizeCmd = "SIZE " + widthMm + " mm, " + heightMm + " mm\n";
 
@@ -438,17 +448,18 @@ public class MainActivity extends Activity {
                     Bitmap labelBitmap = renderPageAutoRotated(page, scaledWidth, scaledHeight);
                     page.close();
 
-                    Bitmap printCanvas = Bitmap.createBitmap(finalCanvasWidth, finalCanvasHeight, Bitmap.Config.ARGB_8888);
+                    Bitmap printCanvas = Bitmap.createBitmap(targetWidth, finalCanvasHeight, Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(printCanvas);
                     canvas.drawColor(Color.WHITE);
 
-                    // জুম করা লেবেলটি কাগজের ঠিক মাঝখানে বসানো
-                    int leftOffset = (finalCanvasWidth - scaledWidth) / 2;
+                    // জুম করা লেবেল মাঝখানে বসানো ও টপ মার্জিন অ্যাডজাস্ট
+                    int leftOffset = (targetWidth - scaledWidth) / 2;
                     int topOffset = (finalCanvasHeight - scaledHeight) / 3;
+                    if (topOffset < 0) topOffset = 0;
                     canvas.drawBitmap(labelBitmap, leftOffset, topOffset, null);
                     labelBitmap.recycle();
 
-                    // নিচ থেকে ৩ মিমি ওপরে পেজ নম্বর (সব সময় স্থির ও স্পষ্ট থাকবে)
+                    // নিচ থেকে ৩ মিমি ওপরে মার্জিনে পেজ নম্বর প্রিন্ট (যেমন: Pg: 1/15)
                     Paint pageNumPaint = new Paint();
                     pageNumPaint.setColor(Color.BLACK);
                     pageNumPaint.setTextSize(20);
@@ -456,7 +467,7 @@ public class MainActivity extends Activity {
                     pageNumPaint.setTextAlign(Paint.Align.RIGHT);
 
                     String pageText = "Pg: " + currPage + "/" + total;
-                    canvas.drawText(pageText, finalCanvasWidth - 25, finalCanvasHeight - 36, pageNumPaint);
+                    canvas.drawText(pageText, targetWidth - 25, finalCanvasHeight - 36, pageNumPaint);
 
                     byte[] tsplCommands = buildTsplBitmapCommand(printCanvas, sizeCmd);
                     printCanvas.recycle();
@@ -480,13 +491,4 @@ public class MainActivity extends Activity {
                 updateStatus("Error: " + e.getMessage());
                 showToast("Failed: " + e.getMessage());
             } finally {
-                try { if (connection != null) connection.close(); } catch (Exception ignored) {}
-                try { if (renderer != null) renderer.close(); } catch (Exception ignored) {}
-                try { if (pfd != null) pfd.close(); } catch (Exception ignored) {}
-                mainHandler.post(() -> btnPrint.setEnabled(true));
-            }
-        }).start();
-    }
-
-    private void updateStatus(String msg) {
-        mainHandler.post(() -> {
+                try
