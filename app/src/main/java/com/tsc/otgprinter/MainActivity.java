@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
 
     private int totalPdfPages = 0;
     private int currentPreviewPage = 0;
-    private int currentZoomPercent = 100; // ডিফল্ট ১০০% জুম
+    private int currentZoomPercent = 100;
 
     // পেপার সাইজের তালিকা (3x5 প্রথমে রাখা হয়েছে)
     private final String[] paperOptions = {
@@ -249,7 +249,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // প্রিভিউতেও সঠিক অনুপাতে ঘোরানো ও জুম করা ছবি দেখানো
+    // প্রিভিউতেও সঠিক অনুপাতে ঘোরানো ছবি দেখানো
     private void renderPreviewPage(int pageIndex) {
         if (pdfUri == null || totalPdfPages == 0) return;
         try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pdfUri, "r")) {
@@ -261,7 +261,7 @@ public class MainActivity extends Activity {
                 int widthMm = paperDimensionsMm[selectedIndex][0];
                 int heightMm = paperDimensionsMm[selectedIndex][1];
 
-                // প্রিভিউ স্কেলিং ও জুম হিসাব
+                // প্রিভিউ স্কেলিং ও জুম
                 int previewW = (widthMm * 4);
                 int previewH = (heightMm * 4);
 
@@ -459,7 +459,7 @@ public class MainActivity extends Activity {
                     canvas.drawBitmap(labelBitmap, leftOffset, topOffset, null);
                     labelBitmap.recycle();
 
-                    // নিচ থেকে ৩ মিমি ওপরে মার্জিনে পেজ নম্বর প্রিন্ট (যেমন: Pg: 1/15)
+                    // কাগজের একদম নিচে ৩ মিমি ওপরে মার্জিনে পেজ নম্বর প্রিন্ট (যেমন: Pg: 1/15)
                     Paint pageNumPaint = new Paint();
                     pageNumPaint.setColor(Color.BLACK);
                     pageNumPaint.setTextSize(20);
@@ -491,4 +491,81 @@ public class MainActivity extends Activity {
                 updateStatus("Error: " + e.getMessage());
                 showToast("Failed: " + e.getMessage());
             } finally {
-                try
+                try { if (connection != null) connection.close(); } catch (Exception ignored) {}
+                try { if (renderer != null) renderer.close(); } catch (Exception ignored) {}
+                try { if (pfd != null) pfd.close(); } catch (Exception ignored) {}
+                mainHandler.post(() -> btnPrint.setEnabled(true));
+            }
+        }).start();
+    }
+
+    private void updateStatus(String msg) {
+        mainHandler.post(() -> {
+            if (tvProgress != null) tvProgress.setText(msg);
+        });
+    }
+
+    private void showToast(String msg) {
+        mainHandler.post(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show());
+    }
+
+    private List<Integer> parsePageSelection(String input, int total) {
+        List<Integer> list = new ArrayList<>();
+        if (input == null || input.isEmpty()) {
+            for (int i = 0; i < total; i++) list.add(i);
+            return list;
+        }
+
+        try {
+            if (input.contains("-")) {
+                String[] parts = input.split("-");
+                int start = Math.max(1, Integer.parseInt(parts[0].trim()));
+                int end = Math.min(total, Integer.parseInt(parts[1].trim()));
+                for (int i = start; i <= end; i++) list.add(i - 1);
+            } else {
+                int p = Integer.parseInt(input);
+                if (p >= 1 && p <= total) list.add(p - 1);
+            }
+        } catch (Exception e) {
+            for (int i = 0; i < total; i++) list.add(i);
+        }
+        return list;
+    }
+
+    private byte[] buildTsplBitmapCommand(Bitmap bitmap, String sizeCommand) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int widthBytes = (width + 7) / 8;
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            String init = sizeCommand + "GAP 3 mm, 0 mm\nDIRECTION 1\nCLS\nBITMAP 0,0," + widthBytes + "," + height + ",0,";
+            baos.write(init.getBytes());
+
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < widthBytes; x++) {
+                    int b = 0;
+                    for (int bit = 0; bit < 8; bit++) {
+                        int pixelX = x * 8 + bit;
+                        if (pixelX < width) {
+                            int pixel = bitmap.getPixel(pixelX, y);
+                            int luminance = (int) (0.299 * ((pixel >> 16) & 0xFF) + 0.587 * ((pixel >> 8) & 0xFF) + 0.114 * (pixel & 0xFF));
+                            if (luminance >= 128) {
+                                b |= (1 << (7 - bit));
+                            }
+                        }
+                    }
+                    baos.write(b);
+                }
+            }
+            baos.write("\nPRINT 1,1\n".getBytes());
+        } catch (Exception ignored) {}
+        return baos.toByteArray();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try { unregisterReceiver(usbReceiver); } catch (Exception ignored) {}
+    }
+}
