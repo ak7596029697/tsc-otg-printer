@@ -141,6 +141,43 @@
             android:background="#FFFFFF"
             android:layout_marginBottom="12dp" />
 
+        <!-- নতুন জুম স্লাইডার সেকশন (50% থেকে 130%) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#E2E8F0"
+            android:padding="6dp"
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:id="@+id/tvZoomLevel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Zoom: 100%"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:textColor="#0F172A"
+                android:minWidth="85dp" />
+
+            <SeekBar
+                android:id="@+id/sbZoom"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="80"
+                android:progress="50" />
+
+            <Button
+                android:id="@+id/btnResetZoom"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:text="100%"
+                android:textSize="11sp"
+                android:textAllCaps="false" />
+        </LinearLayout>
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
